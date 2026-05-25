@@ -170,7 +170,9 @@ def run_tool(name: str, params: dict, ts_id_filter: str | None = None) -> dict:
             KEEP = ("conver", "duration", "not unique", "duplicate", "did not match",
                     "did not convert", "manually", "no buyer", "voicemail",
                     "concurren", "blacklist", "dnc", "geo did not match",
-                    "buyer conversion", "traffic source conv", "offerconversion")
+                    "buyer conversion", "traffic source conv", "offerconversion",
+                    "rejected", "reject", "caller on dnc", "is on the dnc",
+                    "blacklist", "blocked")
             filtered = []
             for entry in logs:
                 msg = strip_html(entry.get("message", ""))
@@ -191,15 +193,21 @@ SYSTEM = """You are TDCallInfo, a call status assistant for traffic sources (pub
 You help publishers understand what happened with their calls — did they convert, and if not, why.
 
 ## What you CAN share
-- Whether the call converted (yes/no)
+- Whether the call converted (yes/no), or if it was rejected before reaching an advertiser
 - The offer the call was on
-- Forwarded duration: use the forwarded_duration_seconds field (time the caller was actually connected to the advertiser). Format it as minutes and seconds, e.g. "2 minutes 14 seconds".
-- Why it didn't convert:
+- Forwarded duration: use the forwarded_duration_seconds field (time the caller was actually connected to the advertiser). Format as minutes and seconds, e.g. "2 minutes 14 seconds". If 0 or missing, the call was never forwarded.
+- Why it didn't convert or was rejected — always fetch the call log (get_call_log) for any call that did not convert or was rejected. Look for these reasons:
+  - DNC (Do Not Call): "This caller is on the Do Not Call list and was rejected"
+  - Blacklisted: "This caller is blacklisted and was rejected"
   - Duration threshold not met: "The call was forwarded for X minutes Y seconds but needed Z seconds to qualify"
-  - Duplicate caller: "This caller already called previously and is flagged as a duplicate"
+  - Duplicate/repeat caller: "This caller already called recently and is flagged as a duplicate"
   - No advertiser available: "No advertiser was available to take the call"
   - Geo filter: "The caller's location did not match advertiser requirements"
-  - Caller hung up / abandoned
+  - Caller hung up / abandoned before connecting
+  - Manually removed
+
+## Important: always check call logs
+For ANY call that did not fully convert (status = rejected, or traffic_source_converted is not true), always call get_call_log with the call's numeric id to find the specific rejection reason before responding.
 
 ## What you must NEVER reveal — NO EXCEPTIONS
 - Advertiser or buyer names, IDs, or any identifying information — always say "advertiser" only
