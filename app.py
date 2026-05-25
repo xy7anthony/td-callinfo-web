@@ -73,9 +73,10 @@ def scrub_call(call: dict) -> dict:
     for field in ("offer", "name"):
         if field in clean and clean[field]:
             clean[field] = clean[field].replace("&amp;", "&")
-    ts_id = call.get("traffic_source_id")
-    if ts_id:
-        clean["traffic_source"] = f"TS#{ts_id}"
+    # Use the partner-visible ID (user_traffic_source_id) for display
+    user_ts_id = call.get("user_traffic_source_id")
+    if user_ts_id:
+        clean["traffic_source"] = f"TS#{user_ts_id}"
     return clean
 
 def scrub_log(messages: list[str]) -> list[str]:
@@ -117,6 +118,10 @@ TOOLS = [
     }
 ]
 
+def match_ts(call: dict, ts_id_filter: str) -> bool:
+    """Check if a call belongs to the given partner (user_traffic_source_id)."""
+    return str(call.get("user_traffic_source_id", "")) == str(ts_id_filter)
+
 def run_tool(name: str, params: dict, ts_id_filter: str | None = None) -> dict:
     try:
         if name == "lookup_call_by_uuid":
@@ -125,7 +130,7 @@ def run_tool(name: str, params: dict, ts_id_filter: str | None = None) -> dict:
             data = r.json()
             if "call" in data:
                 call = data["call"]
-                if ts_id_filter and str(call.get("traffic_source_id", "")) != str(ts_id_filter):
+                if ts_id_filter and not match_ts(call, ts_id_filter):
                     return {"error": "no_match",
                             "message": "This call is not associated with your Partner ID."}
                 data["call"] = scrub_call(call)
@@ -139,8 +144,7 @@ def run_tool(name: str, params: dict, ts_id_filter: str | None = None) -> dict:
             if "calls" in data:
                 calls = data["calls"]
                 if ts_id_filter:
-                    calls = [c for c in calls
-                             if str(c.get("traffic_source_id", "")) == str(ts_id_filter)]
+                    calls = [c for c in calls if match_ts(c, ts_id_filter)]
                     if not calls:
                         return {"error": "no_match",
                                 "message": "No calls found for your Partner ID with this phone number."}
