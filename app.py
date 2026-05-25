@@ -167,17 +167,34 @@ def run_tool(name: str, params: dict, ts_id_filter: str | None = None) -> dict:
                              headers={"Authorization": TD_AUTH}, timeout=15)
             data = r.json()
             logs = data.get("call_logs", [])
-            KEEP = ("conver", "duration", "not unique", "duplicate", "did not match",
-                    "did not convert", "manually", "no buyer", "voicemail",
-                    "concurren", "blacklist", "dnc", "geo did not match",
-                    "buyer conversion", "traffic source conv", "offerconversion",
-                    "rejected", "reject", "caller on dnc", "is on the dnc",
-                    "blacklist", "blocked")
+            DIAGNOSTIC_KEYWORDS = (
+                "converted", "duration", "not unique", "duplicate",
+                "did not convert", "manually", "no buyer", "voicemail",
+                "concurrent", "blacklist", "dnc", "geo did not match",
+                "buyer conversion", "traffic source conv", "offerconversion",
+                "caller on dnc", "is on the dnc", "rejecting the call",
+                "call router", "callrouter", "on_dnc", "hangup", "hang up",
+                "call ended", "no answer", "abandoned",
+            )
+            NOISE_PATTERNS = (
+                "[Webhook::",
+                "[OfferConversion!",
+                "did not match since",
+                "Skipping since",
+                "Skipping URL",
+                "retreaver_postback",
+                "ringba_call_uuid",
+                "traffic_source_lead_id",
+            )
             filtered = []
             for entry in logs:
                 msg = strip_html(entry.get("message", ""))
                 level = entry.get("level", "")
-                if level in ("warn", "danger", "success") or any(k in msg.lower() for k in KEEP):
+                # Skip webhook/offerconversion noise lines
+                if any(n in msg for n in NOISE_PATTERNS):
+                    continue
+                # Include danger always; others only if they match diagnostic keywords
+                if level == "danger" or any(k in msg.lower() for k in DIAGNOSTIC_KEYWORDS):
                     msg = scrub_log([msg])[0]
                     filtered.append({"level": level, "message": msg})
             data["call_logs"] = filtered
