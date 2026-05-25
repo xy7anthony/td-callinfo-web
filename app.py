@@ -45,10 +45,15 @@ def check_rate_limit(ts_id: str) -> bool:
 
 # ── Scrubbing ──────────────────────────────────────────────────────────────────
 SCRUB_FIELDS = {
-    "buyer", "buyer_id", "user_buyer_id", "buyer_converted",
+    # Buyer / advertiser identity
+    "buyer", "buyer_id", "user_buyer_id", "buyer_converted", "buyer_repeat_caller",
+    # Revenue / pricing
     "revenue", "buyer_revenue", "trackdrive_cost", "provider_cost",
     "payout", "traffic_source_payout",
+    # Traffic source name (keep ID only)
     "traffic_source", "user_traffic_source_id",
+    # Raw durations we don't want to expose (use answered_duration instead)
+    "total_duration", "hold_duration", "ivr_duration", "attempted_duration", "agent_duration",
 }
 
 LOG_SCRUB_PATTERNS = [
@@ -59,6 +64,7 @@ LOG_SCRUB_PATTERNS = [
     (r"(PING|buyer conversion).{0,60}?'([^']{4,})'", r"\1 [Advertiser]"),
     (r"buyer conversion \(Revenue CPL\) converted \d+ '.+?'", "buyer conversion converted [hidden]"),
     (r"\$[\d.]+", "[hidden]"),
+    (r'\b\d+\.\d{2,}\b', "[hidden]"),   # bare decimal amounts that may be dollar values
 ]
 
 def strip_html(text: str) -> str:
@@ -77,6 +83,10 @@ def scrub_call(call: dict) -> dict:
     user_ts_id = call.get("user_traffic_source_id")
     if user_ts_id:
         clean["traffic_source"] = f"TS#{user_ts_id}"
+    # Expose only the forwarded/connected duration (time actually with advertiser)
+    answered = call.get("answered_duration")
+    if answered is not None:
+        clean["forwarded_duration_seconds"] = answered
     return clean
 
 def scrub_log(messages: list[str]) -> list[str]:
@@ -183,19 +193,22 @@ You help publishers understand what happened with their calls — did they conve
 ## What you CAN share
 - Whether the call converted (yes/no)
 - The offer the call was on
-- Call duration
+- Forwarded duration: use the forwarded_duration_seconds field (time the caller was actually connected to the advertiser). Format it as minutes and seconds, e.g. "2 minutes 14 seconds".
 - Why it didn't convert:
-  - Duration threshold not met: "The call lasted X seconds but needed Y seconds to qualify"
+  - Duration threshold not met: "The call was forwarded for X minutes Y seconds but needed Z seconds to qualify"
   - Duplicate caller: "This caller already called previously and is flagged as a duplicate"
   - No advertiser available: "No advertiser was available to take the call"
   - Geo filter: "The caller's location did not match advertiser requirements"
   - Caller hung up / abandoned
 
-## What you must NEVER reveal
-- Advertiser/buyer names (refer to them only as "advertiser")
-- Revenue amounts or any pricing we receive
-- Payout rates or margins
-- Any competitive or internal network intelligence
+## What you must NEVER reveal — NO EXCEPTIONS
+- Advertiser or buyer names, IDs, or any identifying information — always say "advertiser" only
+- Revenue amounts, RPM, CPL, or any dollar figures we receive
+- Payout amounts or rates paid to the publisher
+- Margins, costs, or any financial data
+- Any token values or internal pricing fields
+
+If any financial or buyer data appears in the raw data, ignore it completely and do not mention it.
 
 Be concise and professional. If a call converted, confirm it. If not, give the plain-English reason.
 Do not speculate beyond what the data shows."""
