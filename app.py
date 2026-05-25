@@ -376,7 +376,7 @@ HTML = """<!DOCTYPE html>
 
   <div class="field">
     <label for="ts_id">Partner ID</label>
-    <input type="text" id="ts_id" placeholder="Your Traffic Source ID (e.g. 10165992)" autocomplete="off" inputmode="numeric">
+    <input type="text" id="ts_id" placeholder="Your Traffic Source ID (e.g. 10200)" autocomplete="off" inputmode="numeric">
   </div>
 
   <div class="field">
