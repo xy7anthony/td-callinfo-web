@@ -284,7 +284,7 @@ HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TDCallInfo — Call Lookup</title>
+<title>Elite-Calls Call Lookup</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -371,7 +371,7 @@ HTML = """<!DOCTYPE html>
 <body>
 <div class="card">
   <div class="logo">📞</div>
-  <h1>TDCallInfo</h1>
+  <h1>Elite-Calls Call Lookup</h1>
   <p class="subtitle">Check the status of your calls and find out why they did or didn't convert.</p>
 
   <div class="field">
