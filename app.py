@@ -48,8 +48,17 @@ log = logging.getLogger(__name__)
 # ── Bot adapter (only if env vars + botbuilder are present) ───────────────────
 bot_adapter = None
 if TEAMS_BOT_AVAILABLE and APP_ID and APP_SECRET:
-    _settings    = BotFrameworkAdapterSettings(APP_ID, APP_SECRET)
-    bot_adapter  = BotFrameworkAdapter(_settings)
+    _settings   = BotFrameworkAdapterSettings(APP_ID, APP_SECRET)
+    bot_adapter = BotFrameworkAdapter(_settings)
+
+    async def _on_turn_error(turn_context, error):
+        log.error("Teams bot turn error: %s", error, exc_info=True)
+        try:
+            await turn_context.send_activity(f"⚠️ Bot error: {error}")
+        except Exception:
+            pass
+
+    bot_adapter.on_turn_error = _on_turn_error
     log.info("Teams bot adapter initialized (App ID: %s)", APP_ID)
 else:
     log.info("Teams bot adapter NOT initialized (missing env vars or botbuilder package)")
@@ -561,7 +570,10 @@ async def process_teams_message(turn_context: "TurnContext"):
     text   = (turn_context.activity.text or "").strip()
     sender = (turn_context.activity.from_property.name or "user") if turn_context.activity.from_property else "user"
 
-    # Strip @mention tags (e.g. <at>TDCallInfo</at>)
+    log.info("Teams message received | type=%s sender=%s text=%r",
+             turn_context.activity.type, sender, text[:80])
+
+    # Strip @mention HTML tags (e.g. <at>TDCallInfo</at>)
     text = re.sub(r"<at>[^<]*</at>", "", text).strip()
 
     # Also strip via entities list
@@ -572,24 +584,27 @@ async def process_teams_message(turn_context: "TurnContext"):
                 if mention_text:
                     text = text.replace(mention_text, "").strip()
 
+    log.info("Teams query after stripping: %r", text)
+
     if not text:
         await turn_context.send_activity(
             "Hi! Send me a call UUID or phone number and I'll look it up for you."
         )
         return
 
-    log.info("Teams [%s] %s: %s", turn_context.activity.conversation.id[:20], sender, text[:80])
-
-    # Typing indicator
-    await turn_context.send_activity(Activity(type="typing"))
-
-    # Run the same lookup used by the web UI (no TS filter for Teams — internal use)
     try:
+        # Typing indicator
+        await turn_context.send_activity(Activity(type="typing"))
+        # Run lookup — no TS filter for Teams (internal use)
         result = await do_lookup(text, ts_id=None)
+        log.info("Teams lookup complete, sending reply (%d chars)", len(result))
         await turn_context.send_activity(result)
     except Exception as e:
         log.error("Teams lookup error: %s", e, exc_info=True)
-        await turn_context.send_activity(f"Error: {e}")
+        try:
+            await turn_context.send_activity(f"⚠️ Error processing your request: {e}")
+        except Exception:
+            pass
 
 
 async def teams_messages_handler(req: web.Request) -> web.Response:
@@ -600,16 +615,21 @@ async def teams_messages_handler(req: web.Request) -> web.Response:
     if req.content_type != "application/json":
         return web.Response(status=415)
 
-    body        = await req.json()
-    activity    = Activity().deserialize(body)
-    auth_header = req.headers.get("Authorization", "")
+    try:
+        body        = await req.json()
+        activity    = Activity().deserialize(body)
+        auth_header = req.headers.get("Authorization", "")
 
-    async def call_fun(turn_context):
-        if turn_context.activity.type == "message":
+        log.info("Teams webhook | activity type=%s", body.get("type", "unknown"))
+
+        async def call_fun(turn_context):
             await process_teams_message(turn_context)
 
-    await bot_adapter.process_activity(activity, auth_header, call_fun)
-    return web.Response(status=200)
+        await bot_adapter.process_activity(activity, auth_header, call_fun)
+        return web.Response(status=200)
+    except Exception as e:
+        log.error("teams_messages_handler error: %s", e, exc_info=True)
+        return web.Response(status=500, text=str(e))
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
