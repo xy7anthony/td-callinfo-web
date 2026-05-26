@@ -285,63 +285,135 @@ HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Elite-Calls Call Lookup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #0f1117;
-    color: #e1e4e8;
+    font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+    background: linear-gradient(135deg, #0a1628, #1a2d4a);
     min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 20px;
+  }
+
+  /* ── Header ── */
+  .site-header {
+    margin-bottom: 32px;
+    text-align: center;
+  }
+  .site-header img {
+    height: 40px;
+    width: auto;
+  }
+
+  /* ── Intro block above card ── */
+  .intro {
+    text-align: center;
+    max-width: 480px;
+    margin-bottom: 24px;
+  }
+  .intro h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 8px;
+    letter-spacing: -0.3px;
+  }
+  .intro p {
+    font-size: 14px;
+    color: rgba(255,255,255,0.55);
+    line-height: 1.6;
+  }
+  .intro .steps {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+  }
+  .intro .step {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    color: rgba(255,255,255,0.65);
+  }
+  .intro .step-num {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #4ade80, #86efac);
+    color: #0a1628;
+    font-size: 11px;
+    font-weight: 700;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 20px;
+    flex-shrink: 0;
   }
+
+  /* ── Card ── */
   .card {
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 12px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
     padding: 36px;
     width: 100%;
-    max-width: 500px;
+    max-width: 480px;
+    backdrop-filter: blur(10px);
   }
-  .logo { font-size: 28px; margin-bottom: 8px; }
-  h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
-  .subtitle { color: #8b949e; font-size: 14px; margin-bottom: 28px; }
   .field { margin-bottom: 18px; }
-  label { display: block; font-size: 13px; color: #8b949e; margin-bottom: 6px; font-weight: 500; }
+  label {
+    display: block;
+    font-size: 12px;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 7px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
   input {
     width: 100%;
-    background: #0d1117;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 11px 14px;
-    color: #e1e4e8;
+    background: rgba(10, 22, 40, 0.7);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    padding: 12px 14px;
+    color: #fff;
     font-size: 15px;
+    font-family: inherit;
     outline: none;
     transition: border-color 0.15s;
   }
-  input:focus { border-color: #58a6ff; }
+  input::placeholder { color: rgba(255,255,255,0.25); }
+  input:focus { border-color: #4ade80; }
   button {
     width: 100%;
-    background: #1f6feb;
-    color: #fff;
+    background: linear-gradient(135deg, #22c55e, #4ade80);
+    color: #0a1628;
     border: none;
-    border-radius: 6px;
-    padding: 12px;
+    border-radius: 8px;
+    padding: 13px;
     font-size: 15px;
-    font-weight: 600;
+    font-weight: 700;
+    font-family: inherit;
     cursor: pointer;
-    transition: background 0.15s;
-    margin-top: 4px;
+    transition: opacity 0.15s, transform 0.1s;
+    margin-top: 6px;
+    letter-spacing: 0.2px;
   }
-  button:hover:not(:disabled) { background: #388bfd; }
-  button:disabled { background: #21262d; color: #6e7681; cursor: not-allowed; }
+  button:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+  button:active:not(:disabled) { transform: translateY(0); }
+  button:disabled { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.3); cursor: not-allowed; transform: none; }
   .spinner {
     display: none;
     text-align: center;
     margin-top: 20px;
-    color: #8b949e;
+    color: rgba(255,255,255,0.4);
     font-size: 13px;
   }
   .spinner.visible { display: block; }
@@ -349,47 +421,56 @@ HTML = """<!DOCTYPE html>
     display: none;
     margin-top: 20px;
     padding: 16px;
-    background: #0d1117;
-    border: 1px solid #30363d;
-    border-radius: 8px;
+    background: rgba(10, 22, 40, 0.5);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
     font-size: 14px;
-    line-height: 1.65;
+    line-height: 1.7;
     white-space: pre-wrap;
     word-break: break-word;
+    color: rgba(255,255,255,0.85);
   }
   .result.visible { display: block; }
-  .result.error { border-color: #f85149; color: #f85149; }
-  .result.success { border-color: #238636; }
+  .result.error { border-color: rgba(248,81,73,0.5); color: #f85149; background: rgba(248,81,73,0.07); }
+  .result.success { border-color: rgba(74,222,128,0.3); background: rgba(15,43,26,0.5); }
   .rate-note {
     text-align: center;
     margin-top: 16px;
-    color: #6e7681;
+    color: rgba(255,255,255,0.25);
     font-size: 12px;
   }
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="logo">📞</div>
-  <h1>Elite-Calls Call Lookup</h1>
-  <p class="subtitle">Check the status of your calls and find out why they did or didn't convert.</p>
 
-  <div class="field">
-    <label for="ts_id">Partner ID</label>
-    <input type="text" id="ts_id" placeholder="Your Traffic Source ID (e.g. 10200)" autocomplete="off" inputmode="numeric">
+  <div class="site-header">
+    <img src="https://elite-calls.com/Elite_Calls_2x1%20light.png" alt="Elite-Calls">
   </div>
 
-  <div class="field">
-    <label for="query">Call UUID or Caller Phone Number</label>
-    <input type="text" id="query" placeholder="UUID or 10-digit phone number" autocomplete="off">
+  <div class="intro">
+    <h2>Partner Call Lookup</h2>
+    <p>Instantly check the status of any call you've sent us — whether it converted and exactly why if it didn't.</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div> Enter your Partner ID</div>
+      <div class="step"><div class="step-num">2</div> Enter a UUID or phone number</div>
+      <div class="step"><div class="step-num">3</div> Get instant results</div>
+    </div>
   </div>
 
-  <button id="btn" onclick="lookup()">Look Up Call</button>
-
-  <div class="spinner" id="spinner">⏳ Looking up call...</div>
-  <div class="result" id="result"></div>
-  <p class="rate-note">Limited to 5 lookups per minute per partner.</p>
-</div>
+  <div class="card">
+    <div class="field">
+      <label for="ts_id">Partner ID</label>
+      <input type="text" id="ts_id" placeholder="Your Traffic Source ID (e.g. 10200)" autocomplete="off" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label for="query">Call UUID or Caller Phone Number</label>
+      <input type="text" id="query" placeholder="UUID or 10-digit phone number" autocomplete="off">
+    </div>
+    <button id="btn" onclick="lookup()">Look Up Call</button>
+    <div class="spinner" id="spinner">⏳ Looking up call...</div>
+    <div class="result" id="result"></div>
+    <p class="rate-note">Limited to 5 lookups per minute per partner.</p>
+  </div>
 
 <script>
 async function lookup() {
