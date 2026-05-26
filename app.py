@@ -307,7 +307,7 @@ HTML = """<!DOCTYPE html>
     text-align: center;
   }
   .site-header img {
-    height: 40px;
+    height: 60px;
     width: auto;
   }
 
