@@ -48,7 +48,12 @@ log = logging.getLogger(__name__)
 # ── Bot adapter (only if env vars + botbuilder are present) ───────────────────
 bot_adapter = None
 if TEAMS_BOT_AVAILABLE and APP_ID and APP_SECRET:
-    _settings   = BotFrameworkAdapterSettings(APP_ID, APP_SECRET)
+    _settings = BotFrameworkAdapterSettings(APP_ID, APP_SECRET)
+    # Use the app's home tenant for token acquisition instead of the default
+    # botframework.com tenant (required for apps registered in a specific tenant)
+    if APP_TENANT:
+        _settings.channel_auth_tenant = APP_TENANT
+        log.info("Using channel_auth_tenant: %s", APP_TENANT)
     bot_adapter = BotFrameworkAdapter(_settings)
 
     async def _on_turn_error(turn_context, error):
