@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-TDCallInfo Web — Publisher-facing call lookup web interface.
+TDCallInfo — Publisher-facing call lookup web interface + Teams bot.
 
-Publishers authenticate with their Traffic Source ID (Partner ID).
-Only shows call results if the traffic source on the call matches.
-Rate limited to 5 lookups per minute per partner.
+Web UI: Publishers authenticate with their Traffic Source ID (Partner ID).
+Teams:  Bot responds to @mentions in channels/chats with call lookups.
 
 Env vars required:
-    ANTHROPIC_API_KEY — Anthropic API key
+    ANTHROPIC_API_KEY     — Anthropic API key
+    MICROSOFT_APP_ID      — Azure Bot App ID      (Teams bot)
+    MICROSOFT_APP_SECRET  — Azure Bot client secret (Teams bot)
+    MICROSOFT_APP_TENANT  — Azure Bot tenant ID   (Teams bot)
 """
 
 import os
@@ -20,6 +22,13 @@ import anthropic
 from collections import defaultdict
 from aiohttp import web
 
+try:
+    from botbuilder.core import BotFrameworkAdapterSettings, BotFrameworkAdapter, TurnContext
+    from botbuilder.schema import Activity
+    TEAMS_BOT_AVAILABLE = True
+except ImportError:
+    TEAMS_BOT_AVAILABLE = False
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 ANT_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
 TD_AUTH     = "Basic dGRwdWI1ZDk4N2Q1MTAxOGQyNDE5OGMzYmI1MzE1ZGQ0NDE2MTp0ZHBydmQ2YWQ1NjE0YjM1NTAzMzM2NmMxYzZkYzI0YzM2ZmQ2ZWUwYzhkYzM="
@@ -28,8 +37,22 @@ MODEL       = "claude-haiku-4-5"
 RATE_LIMIT  = 5   # lookups allowed per window
 RATE_WINDOW = 60  # seconds
 
+# ── Azure Bot config (Teams) ───────────────────────────────────────────────────
+APP_ID     = os.environ.get("MICROSOFT_APP_ID", "")
+APP_SECRET = os.environ.get("MICROSOFT_APP_SECRET", "")
+APP_TENANT = os.environ.get("MICROSOFT_APP_TENANT", "")
+
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
+
+# ── Bot adapter (only if env vars + botbuilder are present) ───────────────────
+bot_adapter = None
+if TEAMS_BOT_AVAILABLE and APP_ID and APP_SECRET:
+    _settings    = BotFrameworkAdapterSettings(APP_ID, APP_SECRET)
+    bot_adapter  = BotFrameworkAdapter(_settings)
+    log.info("Teams bot adapter initialized (App ID: %s)", APP_ID)
+else:
+    log.info("Teams bot adapter NOT initialized (missing env vars or botbuilder package)")
 
 # ── Rate limiting ──────────────────────────────────────────────────────────────
 rate_tracker: dict[str, list[float]] = defaultdict(list)
@@ -532,6 +555,63 @@ document.addEventListener('keydown', e => {
 </body>
 </html>"""
 
+# ── Teams bot message handler ─────────────────────────────────────────────────
+async def process_teams_message(turn_context: "TurnContext"):
+    """Handle an incoming Teams message — strip @mention, run lookup, reply."""
+    text   = (turn_context.activity.text or "").strip()
+    sender = (turn_context.activity.from_property.name or "user") if turn_context.activity.from_property else "user"
+
+    # Strip @mention tags (e.g. <at>TDCallInfo</at>)
+    text = re.sub(r"<at>[^<]*</at>", "", text).strip()
+
+    # Also strip via entities list
+    if turn_context.activity.entities:
+        for entity in turn_context.activity.entities:
+            if entity.type == "mention":
+                mention_text = entity.additional_properties.get("text", "")
+                if mention_text:
+                    text = text.replace(mention_text, "").strip()
+
+    if not text:
+        await turn_context.send_activity(
+            "Hi! Send me a call UUID or phone number and I'll look it up for you."
+        )
+        return
+
+    log.info("Teams [%s] %s: %s", turn_context.activity.conversation.id[:20], sender, text[:80])
+
+    # Typing indicator
+    await turn_context.send_activity(Activity(type="typing"))
+
+    # Run the same lookup used by the web UI (no TS filter for Teams — internal use)
+    try:
+        result = await do_lookup(text, ts_id=None)
+        await turn_context.send_activity(result)
+    except Exception as e:
+        log.error("Teams lookup error: %s", e, exc_info=True)
+        await turn_context.send_activity(f"Error: {e}")
+
+
+async def teams_messages_handler(req: web.Request) -> web.Response:
+    """POST /api/messages — Azure Bot Service webhook."""
+    if bot_adapter is None:
+        return web.Response(status=503, text="Teams bot not configured")
+
+    if req.content_type != "application/json":
+        return web.Response(status=415)
+
+    body        = await req.json()
+    activity    = Activity().deserialize(body)
+    auth_header = req.headers.get("Authorization", "")
+
+    async def call_fun(turn_context):
+        if turn_context.activity.type == "message":
+            await process_teams_message(turn_context)
+
+    await bot_adapter.process_activity(activity, auth_header, call_fun)
+    return web.Response(status=200)
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 async def index_handler(req: web.Request) -> web.Response:
     return web.Response(text=HTML, content_type="text/html")
@@ -560,11 +640,13 @@ async def lookup_handler(req: web.Request) -> web.Response:
         return web.json_response({"error": "Internal server error."}, status=500)
 
 async def health_handler(req: web.Request) -> web.Response:
-    return web.Response(text="TDCallInfo Web is running")
+    teams_status = "enabled" if bot_adapter else "disabled (missing env vars or botbuilder)"
+    return web.Response(text=f"TDCallInfo is running | Teams bot: {teams_status}")
 
 app = web.Application()
 app.router.add_get("/", index_handler)
 app.router.add_post("/lookup", lookup_handler)
+app.router.add_post("/api/messages", teams_messages_handler)
 app.router.add_get("/health", health_handler)
 
 if __name__ == "__main__":
