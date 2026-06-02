@@ -212,6 +212,7 @@ def run_tool(name: str, params: dict, ts_id_filter: str | None = None) -> dict:
                 "caller on dnc", "is on the dnc", "rejecting the call",
                 "call router", "callrouter", "on_dnc", "hangup", "hang up",
                 "call ended", "no answer", "abandoned",
+                "left the conference", "last member",
             )
             NOISE_PATTERNS = (
                 "[Webhook::",
@@ -259,6 +260,11 @@ You help publishers understand what happened with their calls — did they conve
   - Geo filter: "The caller's location did not match advertiser requirements"
   - Caller hung up / abandoned before connecting
   - Manually removed
+  - Who ended the call: look for "left the conference ... last member false/true" log entries
+    - "last member false" = that party hung up FIRST (others were still on the call)
+    - "last member true" = that party was the LAST to leave (they ended the conference)
+    - Example: "consumer left the conference last member false" + "Buyer left the conference last member true" means the caller hung up on the advertiser first
+    - Always note who hung up first when this info is available, e.g. "The caller hung up on the advertiser after X seconds"
 
 ## Important: always check call logs
 For ANY call that did not fully convert (status = rejected, or traffic_source_converted is not true), always call get_call_log with the call's numeric id to find the specific rejection reason before responding.
