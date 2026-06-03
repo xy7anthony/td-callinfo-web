@@ -598,6 +598,11 @@ async def process_teams_message(turn_context: "TurnContext"):
                 if mention_text:
                     text = text.replace(mention_text, "").strip()
 
+    # Normalize phone numbers (strip +, spaces, dashes, parens, etc.)
+    digits_only = re.sub(r"\D", "", text)
+    if len(digits_only) in (10, 11):
+        text = digits_only[-10:]
+
     log.info("Teams query after stripping: %r", text)
 
     if not text:
@@ -664,6 +669,14 @@ async def lookup_handler(req: web.Request) -> web.Response:
 
         if not check_rate_limit(ts_id):
             return web.json_response({"error": "Rate limit exceeded."}, status=429)
+
+        # Normalize phone numbers — strip formatting chars (+, spaces, dashes, parens)
+        # before passing to Claude so it always sees a clean 10-digit number.
+        # UUIDs contain letters so won't be touched.
+        digits_only = re.sub(r"\D", "", query)
+        if len(digits_only) in (10, 11):
+            query = digits_only[-10:]   # always pass bare 10-digit number
+            log.info(f"Normalized phone to: {query}")
 
         log.info(f"Lookup: TS#{ts_id} query={query[:60]}")
         result = await do_lookup(query, ts_id)
