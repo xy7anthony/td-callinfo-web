@@ -168,7 +168,7 @@ TOOLS = [
     },
     {
         "name": "get_kaliper_call",
-        "description": "Get Kaliper data for a call by its Trackdrive UUID (sourceId). Returns buyer ping responses, blacklist flags, QC results, and call quality data. Always call this after a UUID lookup to surface additional context.",
+        "description": "Get Kaliper data for a call by its Trackdrive UUID (sourceId). Returns buyer ping responses, blacklist flags, QC results, and call quality data. Always call this for every call found — whether you found it by UUID or by phone number. Use the 'uuid' field from the TD call record.",
         "input_schema": {
             "type": "object",
             "properties": {"uuid": {"type": "string"}},
@@ -323,7 +323,7 @@ When hangup-order info is available, present it as a separate line after the mai
   📵 The caller hung up on the advertiser first.
 
 ## Kaliper quality data
-After looking up a call by UUID, always call get_kaliper_call with the same UUID to check for additional context.
+After ANY call lookup — whether by UUID or phone number — always call get_kaliper_call for every call found, using the call's uuid field from the Trackdrive response.
 If Kaliper data is found:
 - If the buyer ping response was "blacklist" or "rejected", include it as a reason: "This caller was flagged as blacklisted by the advertiser's system."
 - Surface any other detector answers that explain why the call didn't convert (e.g. DNC, duplicate, geo).
