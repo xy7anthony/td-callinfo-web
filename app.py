@@ -30,12 +30,15 @@ except ImportError:
     TEAMS_BOT_AVAILABLE = False
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-ANT_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
-TD_AUTH     = "Basic dGRwdWI1ZDk4N2Q1MTAxOGQyNDE5OGMzYmI1MzE1ZGQ0NDE2MTp0ZHBydmQ2YWQ1NjE0YjM1NTAzMzM2NmMxYzZkYzI0YzM2ZmQ2ZWUwYzhkYzM="
-TD_BASE     = "https://elite-calls-com.trackdrive.com/api/v1"
-MODEL       = "claude-haiku-4-5"
-RATE_LIMIT  = 5   # lookups allowed per window
-RATE_WINDOW = 60  # seconds
+ANT_KEY      = os.environ.get("ANTHROPIC_API_KEY", "")
+TD_AUTH      = "Basic dGRwdWI1ZDk4N2Q1MTAxOGQyNDE5OGMzYmI1MzE1ZGQ0NDE2MTp0ZHBydmQ2YWQ1NjE0YjM1NTAzMzM2NmMxYzZkYzI0YzM2ZmQ2ZWUwYzhkYzM="
+TD_BASE      = "https://elite-calls-com.trackdrive.com/api/v1"
+KALIPER_KEY  = "yfkTafG4eMlpeOjJFibycWRWiY8em7Kqx2idyA84TlSKMLTe9o954zOWVd5sjCoW00KLyKELIMuxelWEFn6hFMFbR9eZEc7JfivteEeNkYa7PjxIIuSV2S6YY4OD3EGjf2o6jEfPPJSWH8p678zaCussdH348axRdmKXaiAa449GfaN0G3dHu0rHIAW9YYnZKsxgd5MnwVYWA0a4V43r4PUk6lszeMU6Mv3JaBI7E3KJwruUOQAnoOnwO89GYuMe"
+KALIPER_BASE = "https://api.thekaliper.com/api/v1"
+MODEL        = "claude-haiku-4-5"
+RATE_LIMIT   = 5   # lookups allowed per window
+RATE_WINDOW  = 60  # seconds
+ADMIN_TS_ID  = "2382"  # bypass partner filter — shows any call
 
 # ── Azure Bot config (Teams) ───────────────────────────────────────────────────
 APP_ID     = os.environ.get("MICROSOFT_APP_ID", "")
@@ -162,14 +165,26 @@ TOOLS = [
             "properties": {"call_id": {"type": "integer"}},
             "required": ["call_id"]
         }
+    },
+    {
+        "name": "get_kaliper_call",
+        "description": "Get Kaliper data for a call by its Trackdrive UUID (sourceId). Returns buyer ping responses, blacklist flags, QC results, and call quality data. Always call this after a UUID lookup to surface additional context.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"uuid": {"type": "string"}},
+            "required": ["uuid"]
+        }
     }
 ]
 
-def match_ts(call: dict, ts_id_filter: str) -> bool:
+def match_ts(call: dict, ts_id: str) -> bool:
     """Check if a call belongs to the given partner (user_traffic_source_id)."""
-    return str(call.get("user_traffic_source_id", "")) == str(ts_id_filter)
+    return str(call.get("user_traffic_source_id", "")) == str(ts_id)
 
-def run_tool(name: str, params: dict, ts_id_filter: str | None = None) -> dict:
+def run_tool(name: str, params: dict, ts_id_filter: str | None = None, is_admin: bool = False) -> dict:
+    # ADMIN_TS_ID bypasses partner matching — treat as no filter
+    effective_filter = None if is_admin else ts_id_filter
+
     try:
         if name == "lookup_call_by_uuid":
             r = requests.get(f"{TD_BASE}/calls/{params['uuid']}",
@@ -177,7 +192,7 @@ def run_tool(name: str, params: dict, ts_id_filter: str | None = None) -> dict:
             data = r.json()
             if "call" in data:
                 call = data["call"]
-                if ts_id_filter and not match_ts(call, ts_id_filter):
+                if effective_filter and not match_ts(call, effective_filter):
                     return {"error": "no_match",
                             "message": "This call is not associated with your Partner ID."}
                 data["call"] = scrub_call(call)
@@ -190,8 +205,8 @@ def run_tool(name: str, params: dict, ts_id_filter: str | None = None) -> dict:
             data = r.json()
             if "calls" in data:
                 calls = data["calls"]
-                if ts_id_filter:
-                    calls = [c for c in calls if match_ts(c, ts_id_filter)]
+                if effective_filter:
+                    calls = [c for c in calls if match_ts(c, effective_filter)]
                     if not calls:
                         return {"error": "no_match",
                                 "message": "No calls found for your Partner ID with this phone number."}
@@ -238,12 +253,50 @@ def run_tool(name: str, params: dict, ts_id_filter: str | None = None) -> dict:
             data["call_logs"] = filtered
             return data
 
+        elif name == "get_kaliper_call":
+            uuid = params["uuid"]
+            r = requests.get(f"{KALIPER_BASE}/calls/source-id/{uuid}",
+                             headers={"X-API-Key": KALIPER_KEY}, timeout=15)
+            if r.status_code == 404:
+                return {"found": False, "message": "Call not found in Kaliper."}
+            if r.status_code != 200:
+                return {"found": False, "message": f"Kaliper returned HTTP {r.status_code}."}
+            raw = r.json()
+            # The response may be the call directly or wrapped
+            call = raw.get("call", raw)
+            result = {"found": True}
+            # QC pass/fail
+            if "qcCritPass" in call:
+                result["qcCritPass"] = call["qcCritPass"]
+            # Detector answers (QC results, buyer ping responses, blacklist flags)
+            answers = call.get("Answers", call.get("answers", []))
+            if answers:
+                result["answers"] = [
+                    {k: v for k, v in a.items() if k in ("questionId", "question", "answer", "reasoning", "detector")}
+                    for a in answers
+                ]
+            # Call summary from RawData
+            raw_data = call.get("RawData", call.get("rawData", {})) or {}
+            taxonomy = (raw_data.get("taxonomyData", {}) or {}).get("taxonomy", {}) or {}
+            summary = taxonomy.get("call_summary") or taxonomy.get("callSummary")
+            if summary:
+                result["callSummary"] = summary
+            # Publisher / campaign (useful for admin)
+            for field in ("publisherName", "campaignName", "Publisher", "Campaign"):
+                if field in call:
+                    result[field] = call[field]
+            # Inbound phone and duration
+            for field in ("inboundPhone", "duration"):
+                if field in call:
+                    result[field] = call[field]
+            return result
+
         return {"error": f"Unknown tool: {name}"}
     except Exception as e:
         return {"error": str(e)}
 
-# ── System prompt ──────────────────────────────────────────────────────────────
-SYSTEM = """You are TDCallInfo, a call status assistant for traffic sources (publishers) sending calls to Rapid Response Marketing.
+# ── System prompts ─────────────────────────────────────────────────────────────
+_SYSTEM_BASE = """You are TDCallInfo, a call status assistant for traffic sources (publishers) sending calls to Rapid Response Marketing.
 
 You help publishers understand what happened with their calls — did they convert, and if not, why.
 
@@ -269,6 +322,14 @@ When hangup-order info is available, present it as a separate line after the mai
   Reason: Duration threshold not met — forwarded 7 seconds, needed 90 seconds to qualify.
   📵 The caller hung up on the advertiser first.
 
+## Kaliper quality data
+After looking up a call by UUID, always call get_kaliper_call with the same UUID to check for additional context.
+If Kaliper data is found:
+- If the buyer ping response was "blacklist" or "rejected", include it as a reason: "This caller was flagged as blacklisted by the advertiser's system."
+- Surface any other detector answers that explain why the call didn't convert (e.g. DNC, duplicate, geo).
+- Present Kaliper findings on a separate line prefixed with 🔍, e.g.:
+    🔍 Advertiser ping response: Blacklisted — this number is blocked by the advertiser.
+
 ## Important: always check call logs
 For ANY call that did not fully convert (status = rejected, or traffic_source_converted is not true), always call get_call_log with the call's numeric id to find the specific rejection reason before responding.
 
@@ -284,16 +345,40 @@ If any financial or buyer data appears in the raw data, ignore it completely and
 Be concise and professional. If a call converted, confirm it. If not, give the plain-English reason.
 Do not speculate beyond what the data shows."""
 
+_SYSTEM_ADMIN_SUFFIX = """
+
+## ADMIN MODE — no partner filter applied
+You are running in admin mode. You can look up any call regardless of which traffic source it belongs to.
+
+For Kaliper data in admin mode, show ALL available information:
+- QC pass/fail status (qcCritPass field)
+- All detector answers with their reasoning (answers array)
+- Publisher and campaign name
+- Call summary if available (callSummary field)
+- Full ping response details
+
+Format admin Kaliper results clearly:
+  🔍 Kaliper QC: PASS / FAIL
+  🔍 Publisher: [name] | Campaign: [name]
+  🔍 Detectors: [list each answer with reasoning]
+  🔍 Call summary: [summary text]
+
+Show buyer/advertiser names freely in admin mode — the partner filter and name scrubbing do not apply."""
+
+def build_system(is_admin: bool) -> str:
+    return _SYSTEM_BASE + (_SYSTEM_ADMIN_SUFFIX if is_admin else "")
+
 # ── Lookup logic ───────────────────────────────────────────────────────────────
-async def do_lookup(query: str, ts_id: str) -> str:
+async def do_lookup(query: str, ts_id: str | None, is_admin: bool = False) -> str:
     client = anthropic.Anthropic(api_key=ANT_KEY)
     messages = [{"role": "user", "content": query}]
+    system = build_system(is_admin)
 
     for _ in range(10):
         response = client.messages.create(
             model=MODEL,
-            max_tokens=512,
-            system=SYSTEM,
+            max_tokens=768,
+            system=system,
             tools=TOOLS,
             messages=messages
         )
@@ -309,8 +394,8 @@ async def do_lookup(query: str, ts_id: str) -> str:
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    log.info(f"  Tool: {block.name}({block.input}) ts_filter={ts_id}")
-                    result = run_tool(block.name, block.input, ts_id_filter=ts_id)
+                    log.info(f"  Tool: {block.name}({block.input}) ts_filter={ts_id} admin={is_admin}")
+                    result = run_tool(block.name, block.input, ts_id_filter=ts_id, is_admin=is_admin)
                     if isinstance(result, dict) and result.get("error") == "no_match":
                         return result["message"]
                     tool_results.append({
@@ -614,8 +699,8 @@ async def process_teams_message(turn_context: "TurnContext"):
     try:
         # Typing indicator
         await turn_context.send_activity(Activity(type="typing"))
-        # Run lookup — no TS filter for Teams (internal use)
-        result = await do_lookup(text, ts_id=None)
+        # Teams = internal/admin — no partner filter, full Kaliper data
+        result = await do_lookup(text, ts_id=None, is_admin=True)
         log.info("Teams lookup complete, sending reply (%d chars)", len(result))
         await turn_context.send_activity(result)
     except Exception as e:
@@ -670,6 +755,8 @@ async def lookup_handler(req: web.Request) -> web.Response:
         if not check_rate_limit(ts_id):
             return web.json_response({"error": "Rate limit exceeded."}, status=429)
 
+        is_admin = ts_id == ADMIN_TS_ID
+
         # Normalize phone numbers — strip formatting chars (+, spaces, dashes, parens)
         # before passing to Claude so it always sees a clean 10-digit number.
         # UUIDs contain letters so won't be touched.
@@ -678,8 +765,8 @@ async def lookup_handler(req: web.Request) -> web.Response:
             query = digits_only[-10:]   # always pass bare 10-digit number
             log.info(f"Normalized phone to: {query}")
 
-        log.info(f"Lookup: TS#{ts_id} query={query[:60]}")
-        result = await do_lookup(query, ts_id)
+        log.info(f"Lookup: TS#{ts_id} admin={is_admin} query={query[:60]}")
+        result = await do_lookup(query, ts_id, is_admin=is_admin)
         return web.json_response({"result": result})
 
     except Exception as e:
