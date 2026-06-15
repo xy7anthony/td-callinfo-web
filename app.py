@@ -166,20 +166,42 @@ TOOLS = [
             "required": ["call_id"]
         }
     },
-    {
-        "name": "get_kaliper_call",
-        "description": "Get Kaliper data for a call by its Trackdrive UUID (sourceId). Returns buyer ping responses, blacklist flags, QC results, and call quality data. Always call this for every call found — whether you found it by UUID or by phone number. Use the 'uuid' field from the TD call record.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"uuid": {"type": "string"}},
-            "required": ["uuid"]
-        }
-    }
 ]
 
 def match_ts(call: dict, ts_id: str) -> bool:
     """Check if a call belongs to the given partner (user_traffic_source_id)."""
     return str(call.get("user_traffic_source_id", "")) == str(ts_id)
+
+def _fetch_kaliper(uuid: str) -> dict | None:
+    """Fetch Kaliper call data by TD UUID (= Kaliper sourceId). Returns None on miss/error."""
+    try:
+        r = requests.get(f"{KALIPER_BASE}/calls/source-id/{uuid}",
+                         headers={"X-API-Key": KALIPER_KEY}, timeout=10)
+        if r.status_code != 200:
+            return None
+        raw = r.json()
+        call = raw.get("call", raw)
+        result = {}
+        if "qcCritPass" in call:
+            result["qcCritPass"] = call["qcCritPass"]
+        answers = call.get("Answers", call.get("answers", []))
+        if answers:
+            result["answers"] = [
+                {k: v for k, v in a.items() if k in ("questionId", "question", "answer", "reasoning", "detector")}
+                for a in answers
+            ]
+        raw_data = call.get("RawData", call.get("rawData", {})) or {}
+        taxonomy = (raw_data.get("taxonomyData", {}) or {}).get("taxonomy", {}) or {}
+        summary = taxonomy.get("call_summary") or taxonomy.get("callSummary")
+        if summary:
+            result["callSummary"] = summary
+        for field in ("publisherName", "campaignName", "Publisher", "Campaign"):
+            if field in call:
+                result[field] = call[field]
+        return result if result else None
+    except Exception as e:
+        log.warning("Kaliper fetch failed for %s: %s", uuid, e)
+        return None
 
 def run_tool(name: str, params: dict, ts_id_filter: str | None = None, is_admin: bool = False) -> dict:
     # ADMIN_TS_ID bypasses partner matching — treat as no filter
@@ -195,7 +217,11 @@ def run_tool(name: str, params: dict, ts_id_filter: str | None = None, is_admin:
                 if effective_filter and not match_ts(call, effective_filter):
                     return {"error": "no_match",
                             "message": "This call is not associated with your Partner ID."}
-                data["call"] = scrub_call(call)
+                scrubbed = scrub_call(call)
+                kaliper = _fetch_kaliper(call.get("uuid", params["uuid"]))
+                if kaliper:
+                    scrubbed["kaliper"] = kaliper
+                data["call"] = scrubbed
             return data
 
         elif name == "lookup_call_by_phone":
@@ -210,7 +236,14 @@ def run_tool(name: str, params: dict, ts_id_filter: str | None = None, is_admin:
                     if not calls:
                         return {"error": "no_match",
                                 "message": "No calls found for your Partner ID with this phone number."}
-                data["calls"] = [scrub_call(c) for c in calls]
+                enriched = []
+                for c in calls:
+                    scrubbed = scrub_call(c)
+                    kaliper = _fetch_kaliper(c.get("uuid", ""))
+                    if kaliper:
+                        scrubbed["kaliper"] = kaliper
+                    enriched.append(scrubbed)
+                data["calls"] = enriched
             return data
 
         elif name == "get_call_log":
@@ -253,44 +286,6 @@ def run_tool(name: str, params: dict, ts_id_filter: str | None = None, is_admin:
             data["call_logs"] = filtered
             return data
 
-        elif name == "get_kaliper_call":
-            uuid = params["uuid"]
-            r = requests.get(f"{KALIPER_BASE}/calls/source-id/{uuid}",
-                             headers={"X-API-Key": KALIPER_KEY}, timeout=15)
-            if r.status_code == 404:
-                return {"found": False, "message": "Call not found in Kaliper."}
-            if r.status_code != 200:
-                return {"found": False, "message": f"Kaliper returned HTTP {r.status_code}."}
-            raw = r.json()
-            # The response may be the call directly or wrapped
-            call = raw.get("call", raw)
-            result = {"found": True}
-            # QC pass/fail
-            if "qcCritPass" in call:
-                result["qcCritPass"] = call["qcCritPass"]
-            # Detector answers (QC results, buyer ping responses, blacklist flags)
-            answers = call.get("Answers", call.get("answers", []))
-            if answers:
-                result["answers"] = [
-                    {k: v for k, v in a.items() if k in ("questionId", "question", "answer", "reasoning", "detector")}
-                    for a in answers
-                ]
-            # Call summary from RawData
-            raw_data = call.get("RawData", call.get("rawData", {})) or {}
-            taxonomy = (raw_data.get("taxonomyData", {}) or {}).get("taxonomy", {}) or {}
-            summary = taxonomy.get("call_summary") or taxonomy.get("callSummary")
-            if summary:
-                result["callSummary"] = summary
-            # Publisher / campaign (useful for admin)
-            for field in ("publisherName", "campaignName", "Publisher", "Campaign"):
-                if field in call:
-                    result[field] = call[field]
-            # Inbound phone and duration
-            for field in ("inboundPhone", "duration"):
-                if field in call:
-                    result[field] = call[field]
-            return result
-
         return {"error": f"Unknown tool: {name}"}
     except Exception as e:
         return {"error": str(e)}
@@ -323,12 +318,11 @@ When hangup-order info is available, present it as a separate line after the mai
   📵 The caller hung up on the advertiser first.
 
 ## Kaliper quality data
-After ANY call lookup — whether by UUID or phone number — always call get_kaliper_call for every call found, using the call's uuid field from the Trackdrive response.
-If Kaliper data is found:
-- If the buyer ping response was "blacklist" or "rejected", include it as a reason: "This caller was flagged as blacklisted by the advertiser's system."
-- Surface any other detector answers that explain why the call didn't convert (e.g. DNC, duplicate, geo).
-- Present Kaliper findings on a separate line prefixed with 🔍, e.g.:
-    🔍 Advertiser ping response: Blacklisted — this number is blocked by the advertiser.
+Each call record may include a "kaliper" field with buyer ping responses and QC data fetched automatically.
+If a "kaliper" key is present in the call data:
+- Check "answers" for any detector results. If any answer indicates "blacklist", "rejected", or similar buyer rejection, report it as: "🔍 Advertiser ping response: [reason from the answer/reasoning field]"
+- Surface any other answers that explain non-conversion (DNC, duplicate, geo filters, etc.)
+- If the answers array is empty or missing and there is no other kaliper info, do not mention Kaliper at all.
 
 ## Important: always check call logs
 For ANY call that did not fully convert (status = rejected, or traffic_source_converted is not true), always call get_call_log with the call's numeric id to find the specific rejection reason before responding.
@@ -378,6 +372,7 @@ async def do_lookup(query: str, ts_id: str | None, is_admin: bool = False) -> st
         response = client.messages.create(
             model=MODEL,
             max_tokens=768,
+            temperature=0,
             system=system,
             tools=TOOLS,
             messages=messages
