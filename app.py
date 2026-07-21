@@ -752,15 +752,19 @@ async def lookup_handler(req: web.Request) -> web.Response:
 
         is_admin = ts_id == ADMIN_TS_ID
 
-        # Normalize phone numbers — strip formatting chars (+, spaces, dashes, parens)
-        # before passing to Claude so it always sees a clean 10-digit number.
-        # UUIDs contain letters so won't be touched.
+        # Route by input type: UUID, phone number, or raw query for Claude.
+        UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
         digits_only = re.sub(r"\D", "", query)
-        if len(digits_only) in (10, 11):
-            query = digits_only[-10:]   # always pass bare 10-digit number
-            log.info(f"Normalized phone to: {query}")
 
-        log.info(f"Lookup: TS#{ts_id} admin={is_admin} query={query[:60]}")
+        if UUID_RE.match(query):
+            query = f"Look up call with UUID {query}"
+            log.info(f"Detected UUID, explicit prompt")
+        elif len(digits_only) in (10, 11):
+            phone = digits_only[-10:]
+            query = f"Look up calls from phone number {phone}"
+            log.info(f"Detected phone, explicit prompt: {phone}")
+
+        log.info(f"Lookup: TS#{ts_id} admin={is_admin} query={query[:80]}")
         result = await do_lookup(query, ts_id, is_admin=is_admin)
         return web.json_response({"result": result})
 
